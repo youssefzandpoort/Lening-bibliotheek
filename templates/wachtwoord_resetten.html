@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Nieuw wachtwoord</title></head>
+<body>
+    <h1>Nieuw wachtwoord</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Nieuw wachtwoord</label><br>
+        <input type="password" name="wachtwoord" minlength="8" required><br><br>
+        <button type="submit">Opslaan</button>
+    </form>
+</body>
+</html>

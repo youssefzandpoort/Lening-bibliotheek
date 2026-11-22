@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>Inloggen</title></head>
+<body>
+    <h1>Inloggen</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>E-mail</label><br>
+        <input type="email" name="email" required><br><br>
+        <label>Wachtwoord</label><br>
+        <input type="password" name="wachtwoord" required><br><br>
+        <button type="submit">Inloggen</button>
+    </form>
+    <a href="{{ url_for('registreren') }}">Nog geen account? Registreren</a>
+    <br><a href="{{ url_for('wachtwoord_vergeten') }}">Wachtwoord vergeten?</a>
+</body>
+</html>

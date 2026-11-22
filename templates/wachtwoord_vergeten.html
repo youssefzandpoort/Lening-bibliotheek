@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>Wachtwoord vergeten</title></head>
+<body>
+    <h1>Wachtwoord vergeten</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>E-mail</label><br>
+        <input type="email" name="email" required><br><br>
+        <button type="submit">Resetlink aanvragen</button>
+    </form>
+    <a href="{{ url_for('login') }}">Terug naar inloggen</a>
+</body>
+</html>

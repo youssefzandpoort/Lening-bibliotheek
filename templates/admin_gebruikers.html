@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gebruikersbeheer</title>
+</head>
+<body>
+    <h1>Gebruikersbeheer</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <a href="{{ url_for('admin_gebruiker_nieuw') }}">+ Gebruiker toevoegen</a>
+    <br><br>
+    <table border="1" cellpadding="6">
+        <tr>
+            <th>Naam</th>
+            <th>E-mail</th>
+            <th>Rol</th>
+            <th>Status</th>
+            <th>Acties</th>
+        </tr>
+        {% for g in gebruikers %}
+        <tr>
+            <td>{{ g.naam }}</td>
+            <td>{{ g.email }}</td>
+            <td>{{ g.rol }}</td>
+            <td>{{ 'actief' if g.actief else 'inactief' }}</td>
+            <td>
+                <a href="{{ url_for('admin_gebruiker_bewerken', id=g.id) }}">Aanpassen</a>
+                {% if g.id != current_user.id %}
+                <form method="post" action="{{ url_for('admin_gebruiker_actief', id=g.id) }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">{{ 'Op inactief zetten' if g.actief else 'Activeren' }}</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    <br>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>

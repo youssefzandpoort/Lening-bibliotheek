@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gebruiker</title>
+</head>
+<body>
+    <h1>{% if gebruiker %}Gebruiker aanpassen{% else %}Gebruiker toevoegen{% endif %}</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Naam</label><br>
+        <input type="text" name="naam" value="{{ gebruiker.naam if gebruiker else '' }}" maxlength="100" required><br><br>
+        <label>E-mail</label><br>
+        <input type="email" name="email" value="{{ gebruiker.email if gebruiker else '' }}" maxlength="120" required><br><br>
+        <label>Rol</label><br>
+        <select name="rol">
+            {% for r in rollen %}
+                <option value="{{ r }}" {% if gebruiker and gebruiker.rol == r %}selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+        </select><br><br>
+        {% if not gebruiker %}
+            <label>Wachtwoord</label><br>
+            <input type="password" name="wachtwoord" minlength="8" required><br><br>
+        {% endif %}
+        <button type="submit">Opslaan</button>
+    </form>
+    <a href="{{ url_for('admin_gebruikers') }}">Terug</a>
+</body>
+</html>

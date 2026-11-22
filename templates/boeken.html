@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>School bib</title>
+</head>
+<body>
+    <h1>Onze boeken</h1>
+    <p>Ingelogd als {{ current_user.naam }} ({{ current_user.rol }})</p>
+    {% if current_user.rol == 'admin' %}
+        <a href="{{ url_for('admin_gebruikers') }}">Gebruikersbeheer</a><br><br>
+    {% endif %}
+    <form method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Uitloggen</button>
+    </form>
+
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+
+    {% set beheer = current_user.rol in ['bibliothecaris', 'admin'] %}
+    {% if beheer %}
+        <a href="{{ url_for('boek_toevoegen') }}">+ Boek toevoegen</a>
+    {% endif %}
+    <ul>
+        {% for boek in boeken %}
+            <li>
+                {{ boek.titel }} - {{ boek.auteur }}
+                {% if beheer %}
+                    <a href="{{ url_for('boek_bewerken', id=boek.id) }}">Aanpassen</a>
+                    <form method="post" action="{{ url_for('boek_verwijderen', id=boek.id) }}" style="display:inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit">Verwijderen</button>
+                    </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

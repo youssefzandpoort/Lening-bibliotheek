@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><title>Registreren</title></head>
+<body>
+    <h1>Registreren</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Naam</label><br>
+        <input type="text" name="naam" required><br><br>
+        <label>E-mail</label><br>
+        <input type="email" name="email" required><br><br>
+        <label>Wachtwoord</label><br>
+        <input type="password" name="wachtwoord" minlength="8" required><br><br>
+        <label>Ik ben een</label><br>
+        <select name="rol">
+            <option value="leerling">Leerling</option>
+            <option value="leerkracht">Leerkracht</option>
+        </select><br><br>
+        <button type="submit">Account maken</button>
+    </form>
+    <a href="{{ url_for('login') }}">Al een account? Inloggen</a>
+</body>
+</html>

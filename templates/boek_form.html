@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>School Bib</title>
+</head>
+<body>
+    <h1>{% if boek %}Boek aanpassen{% else %}Boek toevoegen{% endif %}</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Titel</label><br>
+        <input type="text" name="titel" value="{{ boek.titel if boek else '' }}" maxlength="200" required><br><br>
+        <label>Auteur</label><br>
+        <input type="text" name="auteur" value="{{ boek.auteur if boek else '' }}" maxlength="100"><br><br>
+        <button type="submit">Opslaan</button>
+    </form>
+    <a href="{{ url_for('boeken') }}">Terug</a>
+</body>
+</html>
