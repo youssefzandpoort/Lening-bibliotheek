@@ -6,9 +6,14 @@
 <body>
     <h1>Onze boeken</h1>
     <p>Ingelogd als {{ current_user.naam }} ({{ current_user.rol }})</p>
+    {% set beheer = current_user.rol in ['bibliothecaris', 'admin'] %}
     {% if current_user.rol == 'admin' %}
-        <a href="{{ url_for('admin_gebruikers') }}">Gebruikersbeheer</a><br><br>
+        <a href="{{ url_for('admin_gebruikers') }}">Gebruikersbeheer</a><br>
     {% endif %}
+    {% if beheer %}
+        <a href="{{ url_for('categorie_beheer') }}">Categorieën beheren</a><br>
+    {% endif %}
+    <br>
     <form method="post" action="{{ url_for('logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">Uitloggen</button>
@@ -16,22 +21,53 @@
 
     {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
 
-    {% set beheer = current_user.rol in ['bibliothecaris', 'admin'] %}
+    <h2>Zoeken</h2>
+    <form method="get" action="{{ url_for('boeken') }}">
+        <input type="text" name="q" value="{{ q }}" placeholder="Titel, auteur of genre">
+        <select name="categorie">
+            <option value="">Alle genres</option>
+            {% for c in categorieen %}
+                <option value="{{ c.id }}" {% if cat == c.id %}selected{% endif %}>{{ c.naam }}</option>
+            {% endfor %}
+        </select>
+        <select name="sorteer">
+            <option value="titel" {% if sorteer == 'titel' %}selected{% endif %}>Titel A-Z</option>
+            <option value="auteur" {% if sorteer == 'auteur' %}selected{% endif %}>Auteur A-Z</option>
+            <option value="nieuwste" {% if sorteer == 'nieuwste' %}selected{% endif %}>Nieuwste eerst</option>
+        </select>
+        <label><input type="checkbox" name="beschikbaar" value="1" {% if alleen_beschikbaar %}checked{% endif %}> Enkel beschikbaar</label>
+        <button type="submit">Zoeken</button>
+        <a href="{{ url_for('boeken') }}">Wissen</a>
+    </form>
+
     {% if beheer %}
+        <h2>nummer opzoeken</h2>
+        <form method="get" action="{{ url_for('zoek_barcode') }}">
+            <input type="text" name="code" placeholder="Bv. EX00001" required>
+            <button type="submit">Zoek exemplaar</button>
+        </form>
+        <br>
         <a href="{{ url_for('boek_toevoegen') }}">+ Boek toevoegen</a>
     {% endif %}
+
+    <h2>{{ boeken|length }} boek(en)</h2>
     <ul>
         {% for boek in boeken %}
             <li>
-                {{ boek.titel }} - {{ boek.auteur }}
-                {% if beheer %}
-                    <a href="{{ url_for('boek_bewerken', id=boek.id) }}">Aanpassen</a>
-                    <form method="post" action="{{ url_for('boek_verwijderen', id=boek.id) }}" style="display:inline">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit">Verwijderen</button>
-                    </form>
+                <a href="{{ url_for('boek_detail', id=boek.id) }}">{{ boek.titel }}</a>
+                - {{ boek.auteur }}
+                {% if boek.categorie %}[{{ boek.categorie.naam }}]{% endif %}
+                |
+                {% if boek.aantal_exemplaren == 0 %}
+                    Geen exemplaren
+                {% elif boek.aantal_beschikbaar > 0 %}
+                    Beschikbaar ({{ boek.aantal_beschikbaar }}/{{ boek.aantal_exemplaren }})
+                {% else %}
+                    Uitgeleend
                 {% endif %}
             </li>
+        {% else %}
+            <li>Geen boeken gevonden.</li>
         {% endfor %}
     </ul>
 </body>

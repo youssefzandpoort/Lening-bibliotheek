@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Categorieën</title>
+</head>
+<body>
+    <h1>Categorieën en genres</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="naam" maxlength="50" placeholder="Nieuw genre" required>
+        <button type="submit">Toevoegen</button>
+    </form>
+    <br>
+
+    <table border="1" cellpadding="6">
+        <tr>
+            <th>Naam</th>
+            <th>Boeken</th>
+            <th>Acties</th>
+        </tr>
+        {% for c in categorieen %}
+        <tr>
+            <td>
+                <form method="post" action="{{ url_for('categorie_bewerken', id=c.id) }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="naam" value="{{ c.naam }}" maxlength="50" required>
+                    <button type="submit">Hernoemen</button>
+                </form>
+            </td>
+            <td>{{ c.boeken|length }}</td>
+            <td>
+                <form method="post" action="{{ url_for('categorie_verwijderen', id=c.id) }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">Verwijderen</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Nog geen categorieën.</td></tr>
+        {% endfor %}
+    </table>
+    <br>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>

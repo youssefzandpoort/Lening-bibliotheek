@@ -1,11 +1,13 @@
 import re
 import click
+import secrets
 from functools import wraps
 from datetime import timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect
+from sqlalchemy import or_, func
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 
@@ -28,10 +30,45 @@ ROLLEN = ("leerling", "leerkracht", "bibliothecaris", "admin")
 BEHEER_ROLLEN = ("bibliothecaris", "admin")
 
 
+# ---------- modellen ----------
+
+class Categorie(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    naam = db.Column(db.String(50), unique=True, nullable=False)
+
+    boeken = db.relationship("Boek", back_populates="categorie")
+
+
 class Boek(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     titel = db.Column(db.String(200), nullable=False)
     auteur = db.Column(db.String(100))
+    beschrijving = db.Column(db.Text)
+    jaar = db.Column(db.Integer)
+    categorie_id = db.Column(db.Integer, db.ForeignKey("categorie.id"))
+
+    categorie = db.relationship("Categorie", back_populates="boeken")
+    exemplaren = db.relationship(
+        "Exemplaar", back_populates="boek", cascade="all, delete-orphan",
+        order_by="Exemplaar.id",
+    )
+
+    @property
+    def aantal_exemplaren(self):
+        return len(self.exemplaren)
+
+    @property
+    def aantal_beschikbaar(self):
+        return sum(1 for e in self.exemplaren if e.beschikbaar)
+
+
+class Exemplaar(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    boek_id = db.Column(db.Integer, db.ForeignKey("boek.id"), nullable=False)
+    barcode = db.Column(db.String(50), unique=True, nullable=False)
+    beschikbaar = db.Column(db.Boolean, nullable=False, default=True)
+
+    boek = db.relationship("Boek", back_populates="exemplaren")
 
 
 class User(UserMixin, db.Model):
@@ -103,12 +140,39 @@ def gebruiker_fout(naam, email, rol):
     return None
 
 
-def boek_fout(titel, auteur):
+def lees_boek_formulier():
+    """Leest en controleert het boekformulier. Geeft (velden, fout) terug."""
+    titel = request.form.get("titel", "").strip()
+    auteur = request.form.get("auteur", "").strip()
+    beschrijving = request.form.get("beschrijving", "").strip()
+    jaar_tekst = request.form.get("jaar", "").strip()
+    categorie_id = request.form.get("categorie_id", type=int)
+
+    fout = None
+    jaar = None
     if not titel or len(titel) > 200:
-        return "Titel is verplicht (max 200 tekens)."
-    if len(auteur) > 100:
-        return "Auteur mag maximaal 100 tekens zijn."
-    return None
+        fout = "Titel is verplicht (max 200 tekens)."
+    elif len(auteur) > 100:
+        fout = "Auteur mag maximaal 100 tekens zijn."
+    elif len(beschrijving) > 2000:
+        fout = "Beschrijving mag maximaal 2000 tekens zijn."
+    elif jaar_tekst:
+        if not jaar_tekst.isdigit() or not 1000 <= int(jaar_tekst) <= 2100:
+            fout = "Jaar moet tussen 1000 en 2100 liggen."
+        else:
+            jaar = int(jaar_tekst)
+    if not fout and categorie_id and not db.session.get(Categorie, categorie_id):
+        fout = "Ongeldige categorie."
+
+    velden = dict(
+        titel=titel, auteur=auteur, beschrijving=beschrijving,
+        jaar=jaar, categorie_id=categorie_id,
+    )
+    return velden, fout
+
+
+def alle_categorieen():
+    return Categorie.query.order_by(Categorie.naam).all()
 
 
 # ---------- publieke pagina's ----------
@@ -214,24 +278,60 @@ def wachtwoord_resetten(token):
 @app.route("/boeken")
 @login_required
 def boeken():
-    boeklijst = Boek.query.all()
-    return render_template("boeken.html", boeken=boeklijst)
+    q = request.args.get("q", "").strip()
+    cat = request.args.get("categorie", type=int)
+    sorteer = request.args.get("sorteer", "titel")
+    alleen_beschikbaar = request.args.get("beschikbaar") == "1"
+
+    query = Boek.query.outerjoin(Categorie)
+    if q:
+        zoek = f"%{q}%"
+        query = query.filter(or_(
+            Boek.titel.ilike(zoek),
+            Boek.auteur.ilike(zoek),
+            Categorie.naam.ilike(zoek),
+        ))
+    if cat:
+        query = query.filter(Boek.categorie_id == cat)
+    if alleen_beschikbaar:
+        query = query.filter(Boek.exemplaren.any(Exemplaar.beschikbaar.is_(True)))
+
+    sortering = {
+        "titel": Boek.titel,
+        "auteur": Boek.auteur,
+        "nieuwste": Boek.id.desc(),
+    }
+    query = query.order_by(sortering.get(sorteer, Boek.titel))
+
+    return render_template(
+        "boeken.html", boeken=query.all(), categorieen=alle_categorieen(),
+        q=q, cat=cat, sorteer=sorteer, alleen_beschikbaar=alleen_beschikbaar,
+    )
+
+
+@app.route("/boeken/<int:id>")
+@login_required
+def boek_detail(id):
+    boek = db.get_or_404(Boek, id)
+    return render_template("boek_detail.html", boek=boek)
 
 
 @app.route("/boeken/nieuw", methods=["GET", "POST"])
 @rol_vereist(*BEHEER_ROLLEN)
 def boek_toevoegen():
+    boek = None
     if request.method == "POST":
-        titel = request.form["titel"].strip()
-        auteur = request.form.get("auteur", "").strip()
-        fout = boek_fout(titel, auteur)
+        velden, fout = lees_boek_formulier()
         if fout:
             flash(fout)
+            boek = Boek(**velden)  # niet opgeslagen, enkel om de invoer te tonen
         else:
-            db.session.add(Boek(titel=titel, auteur=auteur))
+            boek = Boek(**velden)
+            db.session.add(boek)
             db.session.commit()
-            return redirect(url_for("boeken"))
-    return render_template("boek_form.html", boek=None)
+            flash("Boek toegevoegd. Voeg hieronder exemplaren toe.")
+            return redirect(url_for("boek_detail", id=boek.id))
+    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen())
 
 
 @app.route("/boeken/<int:id>/bewerken", methods=["GET", "POST"])
@@ -239,17 +339,16 @@ def boek_toevoegen():
 def boek_bewerken(id):
     boek = db.get_or_404(Boek, id)
     if request.method == "POST":
-        titel = request.form["titel"].strip()
-        auteur = request.form.get("auteur", "").strip()
-        fout = boek_fout(titel, auteur)
+        velden, fout = lees_boek_formulier()
         if fout:
             flash(fout)
         else:
-            boek.titel = titel
-            boek.auteur = auteur
+            for sleutel, waarde in velden.items():
+                setattr(boek, sleutel, waarde)
             db.session.commit()
-            return redirect(url_for("boeken"))
-    return render_template("boek_form.html", boek=boek)
+            flash("Boek aangepast.")
+            return redirect(url_for("boek_detail", id=boek.id))
+    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen())
 
 
 @app.route("/boeken/<int:id>/verwijderen", methods=["POST"])
@@ -258,7 +357,111 @@ def boek_verwijderen(id):
     boek = db.get_or_404(Boek, id)
     db.session.delete(boek)
     db.session.commit()
+    flash("Boek verwijderd.")
     return redirect(url_for("boeken"))
+
+
+# ---------- exemplaren ----------
+
+@app.route("/boeken/<int:id>/exemplaren/nieuw", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def exemplaar_toevoegen(id):
+    boek = db.get_or_404(Boek, id)
+    barcode = request.form.get("barcode", "").strip()
+    if len(barcode) > 50:
+        flash("Barcode mag maximaal 50 tekens zijn.")
+    elif barcode and Exemplaar.query.filter_by(barcode=barcode).first():
+        flash("Deze barcode bestaat al.")
+    else:
+        exemplaar = Exemplaar(
+            boek_id=boek.id, barcode=barcode or "TMP-" + secrets.token_hex(4)
+        )
+        db.session.add(exemplaar)
+        db.session.flush()
+        if not barcode:
+            exemplaar.barcode = f"EX{exemplaar.id:05d}"
+        db.session.commit()
+        flash(f"Exemplaar {exemplaar.barcode} toegevoegd.")
+    return redirect(url_for("boek_detail", id=boek.id))
+
+
+@app.route("/exemplaren/<int:id>/verwijderen", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def exemplaar_verwijderen(id):
+    exemplaar = db.get_or_404(Exemplaar, id)
+    boek_id = exemplaar.boek_id
+    if not exemplaar.beschikbaar:
+        flash("Dit exemplaar is uitgeleend en kan niet verwijderd worden.")
+    else:
+        db.session.delete(exemplaar)
+        db.session.commit()
+        flash("Exemplaar verwijderd.")
+    return redirect(url_for("boek_detail", id=boek_id))
+
+
+@app.route("/zoek-barcode")
+@rol_vereist(*BEHEER_ROLLEN)
+def zoek_barcode():
+    code = request.args.get("code", "").strip()
+    if code:
+        exemplaar = Exemplaar.query.filter(
+            func.lower(Exemplaar.barcode) == code.lower()
+        ).first()
+        if not exemplaar and code.isdigit():
+            exemplaar = db.session.get(Exemplaar, int(code))
+        if exemplaar:
+            return redirect(url_for("boek_detail", id=exemplaar.boek_id))
+        flash("Geen exemplaar gevonden met deze barcode of dit nummer.")
+    return redirect(url_for("boeken"))
+
+
+# ---------- categorieen ----------
+
+@app.route("/categorieen", methods=["GET", "POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def categorie_beheer():
+    if request.method == "POST":
+        naam = request.form.get("naam", "").strip()
+        if not naam or len(naam) > 50:
+            flash("Naam is verplicht (max 50 tekens).")
+        elif Categorie.query.filter(func.lower(Categorie.naam) == naam.lower()).first():
+            flash("Deze categorie bestaat al.")
+        else:
+            db.session.add(Categorie(naam=naam))
+            db.session.commit()
+            flash("Categorie toegevoegd.")
+            return redirect(url_for("categorie_beheer"))
+    return render_template("categorieen.html", categorieen=alle_categorieen())
+
+
+@app.route("/categorieen/<int:id>/bewerken", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def categorie_bewerken(id):
+    categorie = db.get_or_404(Categorie, id)
+    naam = request.form.get("naam", "").strip()
+    bestaand = Categorie.query.filter(func.lower(Categorie.naam) == naam.lower()).first()
+    if not naam or len(naam) > 50:
+        flash("Naam is verplicht (max 50 tekens).")
+    elif bestaand and bestaand.id != categorie.id:
+        flash("Deze categorie bestaat al.")
+    else:
+        categorie.naam = naam
+        db.session.commit()
+        flash("Categorie aangepast.")
+    return redirect(url_for("categorie_beheer"))
+
+
+@app.route("/categorieen/<int:id>/verwijderen", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def categorie_verwijderen(id):
+    categorie = db.get_or_404(Categorie, id)
+    if categorie.boeken:
+        flash(f"Deze categorie wordt nog gebruikt door {len(categorie.boeken)} boek(en).")
+    else:
+        db.session.delete(categorie)
+        db.session.commit()
+        flash("Categorie verwijderd.")
+    return redirect(url_for("categorie_beheer"))
 
 
 # ---------- gebruikersbeheer (admin) ----------

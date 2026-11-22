@@ -4,16 +4,31 @@
     <title>School Bib</title>
 </head>
 <body>
-    <h1>{% if boek %}Boek aanpassen{% else %}Boek toevoegen{% endif %}</h1>
+    <h1>{% if boek and boek.id %}Boek aanpassen{% else %}Boek toevoegen{% endif %}</h1>
     {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
     <form method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label>Titel</label><br>
         <input type="text" name="titel" value="{{ boek.titel if boek else '' }}" maxlength="200" required><br><br>
         <label>Auteur</label><br>
-        <input type="text" name="auteur" value="{{ boek.auteur if boek else '' }}" maxlength="100"><br><br>
+        <input type="text" name="auteur" value="{{ boek.auteur or '' if boek else '' }}" maxlength="100"><br><br>
+        <label>Genre</label><br>
+        <select name="categorie_id">
+            <option value="">Geen genre</option>
+            {% for c in categorieen %}
+                <option value="{{ c.id }}" {% if boek and boek.categorie_id == c.id %}selected{% endif %}>{{ c.naam }}</option>
+            {% endfor %}
+        </select><br><br>
+        <label>Jaar</label><br>
+        <input type="number" name="jaar" value="{{ boek.jaar or '' if boek else '' }}" min="1000" max="2100"><br><br>
+        <label>Beschrijving</label><br>
+        <textarea name="beschrijving" rows="5" cols="50" maxlength="2000">{{ boek.beschrijving or '' if boek else '' }}</textarea><br><br>
         <button type="submit">Opslaan</button>
     </form>
-    <a href="{{ url_for('boeken') }}">Terug</a>
+    {% if boek and boek.id %}
+        <a href="{{ url_for('boek_detail', id=boek.id) }}">Terug</a>
+    {% else %}
+        <a href="{{ url_for('boeken') }}">Terug</a>
+    {% endif %}
 </body>
 </html>
