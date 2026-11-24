@@ -17,6 +17,8 @@
             <option value="leerling">Leerling</option>
             <option value="leerkracht">Leerkracht</option>
         </select><br><br>
+        <label>Klas (bv. 5A&amp;D, leeg laten als leerkracht)</label><br>
+        <input type="text" name="klas" maxlength="20"><br><br>
         <button type="submit">Account maken</button>
     </form>
     <a href="{{ url_for('login') }}">Al een account? Inloggen</a>

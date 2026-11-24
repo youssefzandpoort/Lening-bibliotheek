@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Uitleenperiodes</title>
+</head>
+<body>
+    <h1>Uitleenperiodes</h1>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <p>
+        Standaard is een boek <b>{{ standaard }} dagen</b> uit te lenen.
+        Een periode die je bij een boek zelf instelt gaat voor een regel van de klas,
+        en een regel van de klas gaat voor de standaard.
+    </p>
+
+    <h2>Regel per klas</h2>
+    <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="klas" maxlength="20" placeholder="Klas, bv. 5A&D" required>
+        <input type="number" name="dagen" min="1" max="365" placeholder="Dagen" required>
+        <button type="submit">Opslaan</button>
+    </form>
+    <br>
+    <table border="1" cellpadding="6">
+        <tr><th>Klas</th><th>Dagen</th><th>Acties</th></tr>
+        {% for r in regels %}
+        <tr>
+            <td>{{ r.klas }}</td>
+            <td>{{ r.dagen }}</td>
+            <td>
+                <form method="post" action="{{ url_for('uitleenperiode_verwijderen', id=r.id) }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">Verwijderen</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Nog geen regels per klas.</td></tr>
+        {% endfor %}
+    </table>
+    <p>Een regel per boek stel je in via "Boek aanpassen".</p>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>

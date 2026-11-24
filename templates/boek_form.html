@@ -21,6 +21,8 @@
         </select><br><br>
         <label>Jaar</label><br>
         <input type="number" name="jaar" value="{{ boek.jaar or '' if boek else '' }}" min="1000" max="2100"><br><br>
+        <label>Uitleenperiode in dagen (leeg = standaard van {{ standaard }} dagen of regel van de klas)</label><br>
+        <input type="number" name="uitleenperiode" value="{{ boek.uitleenperiode or '' if boek else '' }}" min="1" max="365"><br><br>
         <label>Beschrijving</label><br>
         <textarea name="beschrijving" rows="5" cols="50" maxlength="2000">{{ boek.beschrijving or '' if boek else '' }}</textarea><br><br>
         <button type="submit">Opslaan</button>

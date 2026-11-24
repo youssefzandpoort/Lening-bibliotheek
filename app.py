@@ -2,12 +2,12 @@ import re
 import click
 import secrets
 from functools import wraps
-from datetime import timedelta
+from datetime import date, timedelta
 from flask import Flask, render_template, request, redirect, url_for, flash, session, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, inspect, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 
@@ -29,6 +29,14 @@ login_manager.login_message = "Log eerst in."
 ROLLEN = ("leerling", "leerkracht", "bibliothecaris", "admin")
 BEHEER_ROLLEN = ("bibliothecaris", "admin")
 
+STANDAARD_DAGEN = 14      # uitleenperiode als er geen boek- of klasregel is
+MAX_VERLENGINGEN = 2      # hoe vaak een uitlening verlengd mag worden
+TOON_OPTIES = ("open", "te_laat", "alle")
+
+# Na zoveel keer te laat teruggebracht krijgt een leerling automatisch een maatregel.
+MAATREGELEN = {3: "melding", 5: "gedragsnota", 7: "strafstudie"}
+SOORTEN = tuple(MAATREGELEN.values())
+
 
 # ---------- modellen ----------
 
@@ -45,6 +53,7 @@ class Boek(db.Model):
     auteur = db.Column(db.String(100))
     beschrijving = db.Column(db.Text)
     jaar = db.Column(db.Integer)
+    uitleenperiode = db.Column(db.Integer)  # dagen, leeg = standaard of klasregel
     categorie_id = db.Column(db.Integer, db.ForeignKey("categorie.id"))
 
     categorie = db.relationship("Categorie", back_populates="boeken")
@@ -69,6 +78,16 @@ class Exemplaar(db.Model):
     beschikbaar = db.Column(db.Boolean, nullable=False, default=True)
 
     boek = db.relationship("Boek", back_populates="exemplaren")
+    uitleningen = db.relationship(
+        "Uitlening", back_populates="exemplaar", order_by="Uitlening.id"
+    )
+
+    @property
+    def huidige_uitlening(self):
+        for uitlening in self.uitleningen:
+            if uitlening.teruggebracht_op is None:
+                return uitlening
+        return None
 
 
 class User(UserMixin, db.Model):
@@ -78,10 +97,22 @@ class User(UserMixin, db.Model):
     wachtwoord_hash = db.Column(db.String(255), nullable=False)
     rol = db.Column(db.String(20), nullable=False, default="leerling")
     actief = db.Column(db.Boolean, nullable=False, default=True)
+    klas = db.Column(db.String(20))
+
+    uitleningen = db.relationship("Uitlening", back_populates="user")
+    maatregelen = db.relationship("Maatregel", back_populates="user")
 
     @property
     def is_active(self):
         return self.actief
+
+    @property
+    def aantal_te_laat(self):
+        """Hoe vaak deze gebruiker een boek te laat heeft teruggebracht."""
+        return sum(
+            1 for u in self.uitleningen
+            if u.teruggebracht_op and u.teruggebracht_op > u.uiterste_datum
+        )
 
     def set_password(self, wachtwoord):
         self.wachtwoord_hash = generate_password_hash(wachtwoord)
@@ -90,12 +121,76 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.wachtwoord_hash, wachtwoord)
 
 
+class Uitlening(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exemplaar_id = db.Column(db.Integer, db.ForeignKey("exemplaar.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    uitgeleend_op = db.Column(db.Date, nullable=False, default=date.today)
+    uiterste_datum = db.Column(db.Date, nullable=False)
+    teruggebracht_op = db.Column(db.Date)
+    aantal_verlengingen = db.Column(db.Integer, nullable=False, default=0)
+
+    exemplaar = db.relationship("Exemplaar", back_populates="uitleningen")
+    user = db.relationship("User", back_populates="uitleningen")
+    maatregelen = db.relationship("Maatregel", back_populates="uitlening")
+
+    @property
+    def is_open(self):
+        return self.teruggebracht_op is None
+
+    @property
+    def te_laat_dagen(self):
+        einde = self.teruggebracht_op or date.today()
+        return max(0, (einde - self.uiterste_datum).days)
+
+
+class KlasPeriode(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    klas = db.Column(db.String(20), unique=True, nullable=False)
+    dagen = db.Column(db.Integer, nullable=False)
+
+
+class Maatregel(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    uitlening_id = db.Column(db.Integer, db.ForeignKey("uitlening.id"))
+    soort = db.Column(db.String(20), nullable=False)  # melding, gedragsnota, strafstudie
+    reden = db.Column(db.String(200), nullable=False)
+    datum = db.Column(db.Date, nullable=False, default=date.today)
+    afgehandeld = db.Column(db.Boolean, nullable=False, default=False)
+
+    user = db.relationship("User", back_populates="maatregelen")
+    uitlening = db.relationship("Uitlening", back_populates="maatregelen")
+
+
 @login_manager.user_loader
 def load_user(user_id):
     user = db.session.get(User, int(user_id))
     if user and user.actief:
         return user
     return None
+
+
+# ---------- database aanmaken ----------
+
+# Nieuwe kolommen in bestaande tabellen voegt create_all() niet toe.
+# Dat doen we hier zelf, zodat je je database niet hoeft te verwijderen.
+EXTRA_KOLOMMEN = [
+    ("user", "klas", "VARCHAR(20)"),
+    ("boek", "uitleenperiode", "INTEGER"),
+]
+
+
+def maak_database():
+    db.create_all()
+    inspector = inspect(db.engine)
+    for tabel, kolom, kolomtype in EXTRA_KOLOMMEN:
+        bestaande = [k["name"] for k in inspector.get_columns(tabel)]
+        if kolom not in bestaande:
+            with db.engine.begin() as verbinding:
+                verbinding.execute(
+                    text(f'ALTER TABLE "{tabel}" ADD COLUMN {kolom} {kolomtype}')
+                )
 
 
 # ---------- hulpfuncties ----------
@@ -118,6 +213,11 @@ def geen_toegang(e):
     return "Geen toegang: je hebt hier de juiste rol niet voor.", 403
 
 
+@app.template_filter("datum")
+def datum_filter(waarde):
+    return waarde.strftime("%d/%m/%Y") if waarde else "-"
+
+
 def wachtwoord_fout(wachtwoord):
     if len(wachtwoord) < 8:
         return "Wachtwoord moet minstens 8 tekens zijn."
@@ -130,13 +230,15 @@ def wachtwoord_fout(wachtwoord):
     return None
 
 
-def gebruiker_fout(naam, email, rol):
+def gebruiker_fout(naam, email, rol, klas=""):
     if not naam or len(naam) > 100:
         return "Naam is verplicht (max 100 tekens)."
     if len(email) > 120 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         return "Geef een geldig e-mailadres op."
     if rol not in ROLLEN:
         return "Ongeldige rol."
+    if len(klas) > 20:
+        return "Klas mag maximaal 20 tekens zijn."
     return None
 
 
@@ -146,33 +248,96 @@ def lees_boek_formulier():
     auteur = request.form.get("auteur", "").strip()
     beschrijving = request.form.get("beschrijving", "").strip()
     jaar_tekst = request.form.get("jaar", "").strip()
+    periode_tekst = request.form.get("uitleenperiode", "").strip()
     categorie_id = request.form.get("categorie_id", type=int)
 
     fout = None
     jaar = None
+    periode = None
     if not titel or len(titel) > 200:
         fout = "Titel is verplicht (max 200 tekens)."
     elif len(auteur) > 100:
         fout = "Auteur mag maximaal 100 tekens zijn."
     elif len(beschrijving) > 2000:
         fout = "Beschrijving mag maximaal 2000 tekens zijn."
-    elif jaar_tekst:
-        if not jaar_tekst.isdigit() or not 1000 <= int(jaar_tekst) <= 2100:
-            fout = "Jaar moet tussen 1000 en 2100 liggen."
-        else:
-            jaar = int(jaar_tekst)
+    elif jaar_tekst and (not jaar_tekst.isdigit() or not 1000 <= int(jaar_tekst) <= 2100):
+        fout = "Jaar moet tussen 1000 en 2100 liggen."
+    elif periode_tekst and (not periode_tekst.isdigit() or not 1 <= int(periode_tekst) <= 365):
+        fout = "Uitleenperiode moet tussen 1 en 365 dagen liggen."
+    else:
+        jaar = int(jaar_tekst) if jaar_tekst else None
+        periode = int(periode_tekst) if periode_tekst else None
     if not fout and categorie_id and not db.session.get(Categorie, categorie_id):
         fout = "Ongeldige categorie."
 
     velden = dict(
-        titel=titel, auteur=auteur, beschrijving=beschrijving,
-        jaar=jaar, categorie_id=categorie_id,
+        titel=titel, auteur=auteur, beschrijving=beschrijving, jaar=jaar,
+        uitleenperiode=periode, categorie_id=categorie_id,
     )
     return velden, fout
 
 
 def alle_categorieen():
     return Categorie.query.order_by(Categorie.naam).all()
+
+
+def zoek_exemplaar(code):
+    """Zoekt een exemplaar op barcode, of op exemplaarnummer."""
+    code = code.strip()
+    if not code:
+        return None
+    exemplaar = Exemplaar.query.filter(
+        func.lower(Exemplaar.barcode) == code.lower()
+    ).first()
+    if not exemplaar and code.isdigit():
+        exemplaar = db.session.get(Exemplaar, int(code))
+    return exemplaar
+
+
+def uitleenperiode_voor(boek, gebruiker):
+    """Boekregel gaat voor klasregel, en die gaat voor de standaard."""
+    if boek.uitleenperiode:
+        return boek.uitleenperiode
+    if gebruiker.klas:
+        regel = KlasPeriode.query.filter(
+            func.lower(KlasPeriode.klas) == gebruiker.klas.lower()
+        ).first()
+        if regel:
+            return regel.dagen
+    return STANDAARD_DAGEN
+
+
+def naar_overzicht(toon=None):
+    toon = toon or request.form.get("toon")
+    if toon not in TOON_OPTIES:
+        toon = "open"
+    return redirect(url_for("uitleningen", toon=toon))
+
+
+def neem_terug(uitlening):
+    uitlening.teruggebracht_op = date.today()
+    uitlening.exemplaar.beschikbaar = True
+    gebruiker = uitlening.user
+    titel = uitlening.exemplaar.boek.titel
+    te_laat = uitlening.te_laat_dagen
+
+    boodschap = f"'{titel}' teruggenomen van {gebruiker.naam}."
+    if te_laat:
+        aantal = gebruiker.aantal_te_laat
+        boodschap = (
+            f"'{titel}' teruggenomen, maar {te_laat} dag(en) te laat. "
+            f"{gebruiker.naam} was nu {aantal} keer te laat."
+        )
+        soort = MAATREGELEN.get(aantal)
+        if soort:
+            db.session.add(Maatregel(
+                user_id=gebruiker.id, uitlening_id=uitlening.id, soort=soort,
+                reden=f"{aantal} keer te laat ingeleverd",
+            ))
+            boodschap += f" Automatisch geregistreerd: {soort}."
+    db.session.commit()
+    flash(boodschap)
+    return "alle" if te_laat else None
 
 
 # ---------- publieke pagina's ----------
@@ -189,16 +354,17 @@ def registreren():
         email = request.form["email"].strip().lower()
         wachtwoord = request.form["wachtwoord"]
         rol = request.form["rol"]
+        klas = request.form.get("klas", "").strip()
 
         if rol not in ("leerling", "leerkracht"):
             rol = "leerling"
-        fout = gebruiker_fout(naam, email, rol) or wachtwoord_fout(wachtwoord)
+        fout = gebruiker_fout(naam, email, rol, klas) or wachtwoord_fout(wachtwoord)
         if fout:
             flash(fout)
         elif User.query.filter_by(email=email).first():
             flash("Dit e-mailadres is al in gebruik.")
         else:
-            user = User(naam=naam, email=email, rol=rol)
+            user = User(naam=naam, email=email, rol=rol, klas=klas or None)
             user.set_password(wachtwoord)
             db.session.add(user)
             db.session.commit()
@@ -313,7 +479,7 @@ def boeken():
 @login_required
 def boek_detail(id):
     boek = db.get_or_404(Boek, id)
-    return render_template("boek_detail.html", boek=boek)
+    return render_template("boek_detail.html", boek=boek, standaard=STANDAARD_DAGEN)
 
 
 @app.route("/boeken/nieuw", methods=["GET", "POST"])
@@ -331,7 +497,8 @@ def boek_toevoegen():
             db.session.commit()
             flash("Boek toegevoegd. Voeg hieronder exemplaren toe.")
             return redirect(url_for("boek_detail", id=boek.id))
-    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen())
+    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen(),
+                           standaard=STANDAARD_DAGEN)
 
 
 @app.route("/boeken/<int:id>/bewerken", methods=["GET", "POST"])
@@ -348,13 +515,17 @@ def boek_bewerken(id):
             db.session.commit()
             flash("Boek aangepast.")
             return redirect(url_for("boek_detail", id=boek.id))
-    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen())
+    return render_template("boek_form.html", boek=boek, categorieen=alle_categorieen(),
+                           standaard=STANDAARD_DAGEN)
 
 
 @app.route("/boeken/<int:id>/verwijderen", methods=["POST"])
 @rol_vereist(*BEHEER_ROLLEN)
 def boek_verwijderen(id):
     boek = db.get_or_404(Boek, id)
+    if any(e.uitleningen for e in boek.exemplaren):
+        flash("Dit boek heeft uitleengeschiedenis en kan niet verwijderd worden.")
+        return redirect(url_for("boek_detail", id=boek.id))
     db.session.delete(boek)
     db.session.commit()
     flash("Boek verwijderd.")
@@ -392,6 +563,8 @@ def exemplaar_verwijderen(id):
     boek_id = exemplaar.boek_id
     if not exemplaar.beschikbaar:
         flash("Dit exemplaar is uitgeleend en kan niet verwijderd worden.")
+    elif exemplaar.uitleningen:
+        flash("Dit exemplaar heeft uitleengeschiedenis en kan niet verwijderd worden.")
     else:
         db.session.delete(exemplaar)
         db.session.commit()
@@ -404,11 +577,7 @@ def exemplaar_verwijderen(id):
 def zoek_barcode():
     code = request.args.get("code", "").strip()
     if code:
-        exemplaar = Exemplaar.query.filter(
-            func.lower(Exemplaar.barcode) == code.lower()
-        ).first()
-        if not exemplaar and code.isdigit():
-            exemplaar = db.session.get(Exemplaar, int(code))
+        exemplaar = zoek_exemplaar(code)
         if exemplaar:
             return redirect(url_for("boek_detail", id=exemplaar.boek_id))
         flash("Geen exemplaar gevonden met deze barcode of dit nummer.")
@@ -464,6 +633,206 @@ def categorie_verwijderen(id):
     return redirect(url_for("categorie_beheer"))
 
 
+# ---------- uitlenen en terugnemen (bibliothecaris) ----------
+
+@app.route("/uitleningen")
+@rol_vereist(*BEHEER_ROLLEN)
+def uitleningen():
+    toon = request.args.get("toon", "open")
+    if toon not in TOON_OPTIES:
+        toon = "open"
+
+    query = Uitlening.query
+    if toon == "alle":
+        query = query.order_by(Uitlening.uitgeleend_op.desc(), Uitlening.id.desc())
+    else:
+        query = query.filter(Uitlening.teruggebracht_op.is_(None))
+        if toon == "te_laat":
+            query = query.filter(Uitlening.uiterste_datum < date.today())
+        query = query.order_by(Uitlening.uiterste_datum)
+
+    gebruikers = User.query.filter_by(actief=True).order_by(User.naam).all()
+    return render_template(
+        "uitleningen.html", uitleningen=query.all(), toon=toon, gebruikers=gebruikers,
+    )
+
+
+@app.route("/uitleningen/nieuw", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def uitlening_nieuw():
+    gebruiker = db.session.get(User, request.form.get("user_id", type=int) or 0)
+    exemplaar = zoek_exemplaar(request.form.get("barcode", ""))
+
+    if not gebruiker or not gebruiker.actief:
+        flash("Kies een actieve gebruiker.")
+    elif not exemplaar:
+        flash("Geen exemplaar gevonden met deze barcode of dit nummer.")
+    elif not exemplaar.beschikbaar:
+        flash("Dit exemplaar is al uitgeleend.")
+    else:
+        dagen = uitleenperiode_voor(exemplaar.boek, gebruiker)
+        uitlening = Uitlening(
+            exemplaar_id=exemplaar.id,
+            user_id=gebruiker.id,
+            uiterste_datum=date.today() + timedelta(days=dagen),
+        )
+        exemplaar.beschikbaar = False
+        db.session.add(uitlening)
+        db.session.commit()
+        flash(
+            f"'{exemplaar.boek.titel}' uitgeleend aan {gebruiker.naam} "
+            f"tot {uitlening.uiterste_datum:%d/%m/%Y} ({dagen} dagen)."
+        )
+    return naar_overzicht("open")
+
+
+@app.route("/uitleningen/terugnemen", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def uitlening_terugnemen_barcode():
+    exemplaar = zoek_exemplaar(request.form.get("barcode", ""))
+    uitlening = exemplaar.huidige_uitlening if exemplaar else None
+    if not exemplaar:
+        flash("Geen exemplaar gevonden met deze barcode of dit nummer.")
+    elif not uitlening:
+        flash("Dit exemplaar is niet uitgeleend.")
+    else:
+        return naar_overzicht(neem_terug(uitlening) or "open")
+    return naar_overzicht("open")
+
+
+@app.route("/uitleningen/<int:id>/terugnemen", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def uitlening_terugnemen(id):
+    uitlening = db.get_or_404(Uitlening, id)
+    if not uitlening.is_open:
+        flash("Dit boek is al teruggenomen.")
+        return naar_overzicht()
+    return naar_overzicht(neem_terug(uitlening))
+
+
+@app.route("/uitleningen/<int:id>/maatregel", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def maatregel_registreren(id):
+    """Handmatig een maatregel registreren, naast de automatische."""
+    uitlening = db.get_or_404(Uitlening, id)
+    soort = request.form.get("soort", "")
+    reden = request.form.get("reden", "").strip()
+    if soort not in SOORTEN:
+        flash("Kies melding, gedragsnota of strafstudie.")
+    elif not reden or len(reden) > 200:
+        flash("Reden is verplicht (max 200 tekens).")
+    else:
+        db.session.add(Maatregel(
+            user_id=uitlening.user_id, uitlening_id=uitlening.id, soort=soort, reden=reden,
+        ))
+        db.session.commit()
+        flash(f"{soort.capitalize()} geregistreerd voor {uitlening.user.naam}.")
+    return naar_overzicht()
+
+
+@app.route("/maatregelen")
+@rol_vereist(*BEHEER_ROLLEN)
+def maatregelen_overzicht():
+    lijst = Maatregel.query.order_by(
+        Maatregel.afgehandeld, Maatregel.datum.desc(), Maatregel.id.desc()
+    ).all()
+    return render_template("maatregelen.html", maatregelen=lijst, drempels=MAATREGELEN)
+
+
+@app.route("/maatregelen/<int:id>/afgehandeld", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def maatregel_afgehandeld(id):
+    maatregel = db.get_or_404(Maatregel, id)
+    maatregel.afgehandeld = not maatregel.afgehandeld
+    db.session.commit()
+    return redirect(url_for("maatregelen_overzicht"))
+
+
+@app.route("/uitleenperiodes", methods=["GET", "POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def uitleenperiodes():
+    if request.method == "POST":
+        klas = request.form.get("klas", "").strip()
+        dagen = request.form.get("dagen", type=int)
+        if not klas or len(klas) > 20:
+            flash("Klas is verplicht (max 20 tekens).")
+        elif not dagen or not 1 <= dagen <= 365:
+            flash("Dagen moet tussen 1 en 365 liggen.")
+        else:
+            regel = KlasPeriode.query.filter(
+                func.lower(KlasPeriode.klas) == klas.lower()
+            ).first()
+            if regel:
+                regel.dagen = dagen
+            else:
+                db.session.add(KlasPeriode(klas=klas, dagen=dagen))
+            db.session.commit()
+            flash("Uitleenperiode opgeslagen.")
+            return redirect(url_for("uitleenperiodes"))
+    regels = KlasPeriode.query.order_by(KlasPeriode.klas).all()
+    return render_template("uitleenperiodes.html", regels=regels, standaard=STANDAARD_DAGEN)
+
+
+@app.route("/uitleenperiodes/<int:id>/verwijderen", methods=["POST"])
+@rol_vereist(*BEHEER_ROLLEN)
+def uitleenperiode_verwijderen(id):
+    regel = db.get_or_404(KlasPeriode, id)
+    db.session.delete(regel)
+    db.session.commit()
+    flash("Regel verwijderd.")
+    return redirect(url_for("uitleenperiodes"))
+
+
+# ---------- mijn boeken (iedereen die ingelogd is) ----------
+
+@app.route("/mijn-boeken")
+@login_required
+def mijn_boeken():
+    open_uitleningen = (
+        Uitlening.query.filter_by(user_id=current_user.id, teruggebracht_op=None)
+        .order_by(Uitlening.uiterste_datum).all()
+    )
+    geschiedenis = (
+        Uitlening.query
+        .filter(Uitlening.user_id == current_user.id, Uitlening.teruggebracht_op.isnot(None))
+        .order_by(Uitlening.teruggebracht_op.desc()).all()
+    )
+    maatregelen = (
+        Maatregel.query.filter_by(user_id=current_user.id)
+        .order_by(Maatregel.datum.desc(), Maatregel.id.desc()).all()
+    )
+    return render_template(
+        "mijn_boeken.html", open_uitleningen=open_uitleningen,
+        geschiedenis=geschiedenis, maatregelen=maatregelen,
+        aantal_te_laat=current_user.aantal_te_laat, drempels=MAATREGELEN,
+        max_verlengingen=MAX_VERLENGINGEN,
+    )
+
+
+@app.route("/uitleningen/<int:id>/verlengen", methods=["POST"])
+@login_required
+def uitlening_verlengen(id):
+    uitlening = db.get_or_404(Uitlening, id)
+    if uitlening.user_id != current_user.id:
+        abort(403)
+    if not uitlening.is_open:
+        flash("Dit boek heb je al teruggebracht.")
+    elif uitlening.te_laat_dagen > 0:
+        flash("Dit boek is te laat, je kan niet meer verlengen. Breng het terug.")
+    elif uitlening.aantal_verlengingen >= MAX_VERLENGINGEN:
+        flash(f"Je kan een boek maximaal {MAX_VERLENGINGEN} keer verlengen.")
+    else:
+        dagen = uitleenperiode_voor(uitlening.exemplaar.boek, uitlening.user)
+        uitlening.uiterste_datum += timedelta(days=dagen)
+        uitlening.aantal_verlengingen += 1
+        db.session.commit()
+        flash(
+            f"Verlengd tot {uitlening.uiterste_datum:%d/%m/%Y} "
+            f"(nog {MAX_VERLENGINGEN - uitlening.aantal_verlengingen} keer mogelijk)."
+        )
+    return redirect(url_for("mijn_boeken"))
+
+
 # ---------- gebruikersbeheer (admin) ----------
 
 @app.route("/admin/gebruikers")
@@ -480,14 +849,15 @@ def admin_gebruiker_nieuw():
         naam = request.form["naam"].strip()
         email = request.form["email"].strip().lower()
         rol = request.form["rol"]
+        klas = request.form.get("klas", "").strip()
         wachtwoord = request.form["wachtwoord"]
-        fout = gebruiker_fout(naam, email, rol) or wachtwoord_fout(wachtwoord)
+        fout = gebruiker_fout(naam, email, rol, klas) or wachtwoord_fout(wachtwoord)
         if not fout and User.query.filter_by(email=email).first():
             fout = "Dit e-mailadres is al in gebruik."
         if fout:
             flash(fout)
         else:
-            user = User(naam=naam, email=email, rol=rol)
+            user = User(naam=naam, email=email, rol=rol, klas=klas or None)
             user.set_password(wachtwoord)
             db.session.add(user)
             db.session.commit()
@@ -504,7 +874,8 @@ def admin_gebruiker_bewerken(id):
         naam = request.form["naam"].strip()
         email = request.form["email"].strip().lower()
         rol = request.form["rol"]
-        fout = gebruiker_fout(naam, email, rol)
+        klas = request.form.get("klas", "").strip()
+        fout = gebruiker_fout(naam, email, rol, klas)
         bestaand = User.query.filter_by(email=email).first()
         if not fout and bestaand and bestaand.id != gebruiker.id:
             fout = "Dit e-mailadres is al in gebruik."
@@ -516,6 +887,7 @@ def admin_gebruiker_bewerken(id):
             gebruiker.naam = naam
             gebruiker.email = email
             gebruiker.rol = rol
+            gebruiker.klas = klas or None
             db.session.commit()
             flash("Gebruiker aangepast.")
             return redirect(url_for("admin_gebruikers"))
@@ -541,7 +913,7 @@ def admin_gebruiker_actief(id):
 @click.option("--email", prompt=True)
 @click.option("--wachtwoord", prompt=True, hide_input=True, confirmation_prompt=True)
 def maak_admin(naam, email, wachtwoord):
-    db.create_all()
+    maak_database()
     email = email.strip().lower()
     fout = gebruiker_fout(naam.strip(), email, "admin") or wachtwoord_fout(wachtwoord)
     if fout:
@@ -559,5 +931,5 @@ def maak_admin(naam, email, wachtwoord):
 
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()
+        maak_database()
     app.run(debug=True)

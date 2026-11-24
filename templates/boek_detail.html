@@ -11,6 +11,9 @@
     <p><b>Auteur:</b> {{ boek.auteur or '-' }}</p>
     <p><b>Genre:</b> {{ boek.categorie.naam if boek.categorie else '-' }}</p>
     <p><b>Jaar:</b> {{ boek.jaar or '-' }}</p>
+    <p><b>Uitleenperiode:</b>
+        {% if boek.uitleenperiode %}{{ boek.uitleenperiode }} dagen{% else %}standaard ({{ standaard }} dagen){% endif %}
+    </p>
     <p><b>Beschikbaarheid:</b>
         {% if boek.aantal_exemplaren == 0 %}
             Geen exemplaren
@@ -28,13 +31,15 @@
             <tr>
                 <th>Barcode</th>
                 <th>Status</th>
-                {% if beheer %}<th>Acties</th>{% endif %}
+                {% if beheer %}<th>Uitgeleend aan</th><th>Acties</th>{% endif %}
             </tr>
             {% for e in boek.exemplaren %}
+            {% set u = e.huidige_uitlening %}
             <tr>
                 <td>{{ e.barcode }}</td>
                 <td>{{ 'Beschikbaar' if e.beschikbaar else 'Uitgeleend' }}</td>
                 {% if beheer %}
+                <td>{% if u %}{{ u.user.naam }} tot {{ u.uiterste_datum|datum }}{% else %}-{% endif %}</td>
                 <td>
                     <form method="post" action="{{ url_for('exemplaar_verwijderen', id=e.id) }}" style="display:inline">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -18,6 +18,8 @@
                 <option value="{{ r }}" {% if gebruiker and gebruiker.rol == r %}selected{% endif %}>{{ r }}</option>
             {% endfor %}
         </select><br><br>
+        <label>Klas</label><br>
+        <input type="text" name="klas" value="{{ gebruiker.klas or '' if gebruiker else '' }}" maxlength="20"><br><br>
         {% if not gebruiker %}
             <label>Wachtwoord</label><br>
             <input type="password" name="wachtwoord" minlength="8" required><br><br>

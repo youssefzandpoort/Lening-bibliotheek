@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Maatregelen</title>
+</head>
+<body>
+    <h1>Maatregelen</h1>
+    <p>
+        Deze worden automatisch geregistreerd als een leerling een boek te laat teruggeeft:
+        {% for aantal, soort in drempels.items() %}{{ aantal }} keer = {{ soort }}{% if not loop.last %}, {% else %}.{% endif %}{% endfor %}
+    </p>
+    {% for bericht in get_flashed_messages() %}<p>{{ bericht }}</p>{% endfor %}
+    <table border="1" cellpadding="6">
+        <tr>
+            <th>Datum</th>
+            <th>Leerling</th>
+            <th>Klas</th>
+            <th>Boek</th>
+            <th>Maatregel</th>
+            <th>Reden</th>
+            <th>Afgehandeld</th>
+        </tr>
+        {% for m in maatregelen %}
+        <tr>
+            <td>{{ m.datum|datum }}</td>
+            <td>{{ m.user.naam }}</td>
+            <td>{{ m.user.klas or '-' }}</td>
+            <td>{{ m.uitlening.exemplaar.boek.titel if m.uitlening else '-' }}</td>
+            <td>{{ m.soort }}</td>
+            <td>{{ m.reden }}</td>
+            <td>
+                {{ 'Ja' if m.afgehandeld else 'Nee' }}
+                <form method="post" action="{{ url_for('maatregel_afgehandeld', id=m.id) }}" style="display:inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit">{{ 'Zet op open' if m.afgehandeld else 'Markeer afgehandeld' }}</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">Nog geen maatregelen.</td></tr>
+        {% endfor %}
+    </table>
+    <br>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>

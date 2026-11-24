@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Uitleningen</title>
+</head>
+<body>
+    <h1>Uitleningen</h1>
+    {% for bericht in get_flashed_messages() %}<p><b>{{ bericht }}</b></p>{% endfor %}
+
+    <h2>Uitlenen</h2>
+    <form method="post" action="{{ url_for('uitlening_nieuw') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <select name="user_id" required>
+            <option value="">Kies gebruiker</option>
+            {% for g in gebruikers %}
+                <option value="{{ g.id }}">{{ g.naam }} ({{ g.rol }}{% if g.klas %}, {{ g.klas }}{% endif %})</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="barcode" placeholder="Barcode of nummer" required>
+        <button type="submit">Uitlenen</button>
+    </form>
+
+    <h2>Terugnemen</h2>
+    <form method="post" action="{{ url_for('uitlening_terugnemen_barcode') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="barcode" placeholder="Barcode of nummer" required>
+        <button type="submit">Terugnemen</button>
+    </form>
+
+    <h2>Overzicht</h2>
+    <p>
+        {% for sleutel, naam in [('open', 'Openstaand'), ('te_laat', 'Te laat'), ('alle', 'Alle (met geschiedenis)')] %}
+            {% if toon == sleutel %}<b>{{ naam }}</b>{% else %}<a href="{{ url_for('uitleningen', toon=sleutel) }}">{{ naam }}</a>{% endif %}
+            {% if not loop.last %}|{% endif %}
+        {% endfor %}
+    </p>
+
+    <table border="1" cellpadding="6">
+        <tr>
+            <th>Boek</th>
+            <th>Barcode</th>
+            <th>Uitgeleend aan</th>
+            <th>Klas</th>
+            <th>Uitgeleend op</th>
+            <th>Uiterste datum</th>
+            <th>Status</th>
+            <th>Acties</th>
+        </tr>
+        {% for u in uitleningen %}
+        <tr>
+            <td><a href="{{ url_for('boek_detail', id=u.exemplaar.boek_id) }}">{{ u.exemplaar.boek.titel }}</a></td>
+            <td>{{ u.exemplaar.barcode }}</td>
+            <td>{{ u.user.naam }}<br><small>{{ u.user.aantal_te_laat }}x te laat</small></td>
+            <td>{{ u.user.klas or '-' }}</td>
+            <td>{{ u.uitgeleend_op|datum }}</td>
+            <td>{{ u.uiterste_datum|datum }}</td>
+            <td>
+                {% if u.is_open %}
+                    {% if u.te_laat_dagen %}<b>TE LAAT ({{ u.te_laat_dagen }} dagen)</b>{% else %}Open{% endif %}
+                {% else %}
+                    Terug op {{ u.teruggebracht_op|datum }}{% if u.te_laat_dagen %} ({{ u.te_laat_dagen }} dagen te laat){% endif %}
+                {% endif %}
+                {% if u.maatregelen %}<br>{{ u.maatregelen|length }} maatregel(en){% endif %}
+            </td>
+            <td>
+                {% if u.is_open %}
+                <form method="post" action="{{ url_for('uitlening_terugnemen', id=u.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="toon" value="{{ toon }}">
+                    <button type="submit">Terugnemen</button>
+                </form>
+                {% endif %}
+                <details>
+                    <summary>Maatregel registreren</summary>
+                    <form method="post" action="{{ url_for('maatregel_registreren', id=u.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="toon" value="{{ toon }}">
+                        <select name="soort">
+                            <option value="melding">Melding</option>
+                            <option value="gedragsnota">Gedragsnota</option>
+                            <option value="strafstudie">Strafstudie</option>
+                        </select>
+                        <input type="text" name="reden" maxlength="200" placeholder="Reden" required>
+                        <button type="submit">Registreren</button>
+                    </form>
+                </details>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Geen uitleningen.</td></tr>
+        {% endfor %}
+    </table>
+    <br>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>

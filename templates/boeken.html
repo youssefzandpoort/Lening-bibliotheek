@@ -7,13 +7,19 @@
     <h1>Onze boeken</h1>
     <p>Ingelogd als {{ current_user.naam }} ({{ current_user.rol }})</p>
     {% set beheer = current_user.rol in ['bibliothecaris', 'admin'] %}
-    {% if current_user.rol == 'admin' %}
-        <a href="{{ url_for('admin_gebruikers') }}">Gebruikersbeheer</a><br>
-    {% endif %}
-    {% if beheer %}
-        <a href="{{ url_for('categorie_beheer') }}">Categorieën beheren</a><br>
-    {% endif %}
-    <br>
+    <p>
+        <a href="{{ url_for('mijn_boeken') }}">Mijn boeken</a>
+        {% if beheer %}
+            | <a href="{{ url_for('uitleningen') }}">Uitleningen</a>
+            | <a href="{{ url_for('uitleningen', toon='te_laat') }}">Te late boeken</a>
+            | <a href="{{ url_for('boetes_overzicht') }}">Boetes</a>
+            | <a href="{{ url_for('uitleenperiodes') }}">Uitleenperiodes</a>
+            | <a href="{{ url_for('categorie_beheer') }}">Categorieën</a>
+        {% endif %}
+        {% if current_user.rol == 'admin' %}
+            | <a href="{{ url_for('admin_gebruikers') }}">Gebruikersbeheer</a>
+        {% endif %}
+    </p>
     <form method="post" action="{{ url_for('logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">Uitloggen</button>
@@ -41,7 +47,7 @@
     </form>
 
     {% if beheer %}
-        <h2>nummer opzoeken</h2>
+        <h2>Barcode of nummer opzoeken</h2>
         <form method="get" action="{{ url_for('zoek_barcode') }}">
             <input type="text" name="code" placeholder="Bv. EX00001" required>
             <button type="submit">Zoek exemplaar</button>

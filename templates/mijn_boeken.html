@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mijn boeken</title>
+</head>
+<body>
+    <h1>Mijn boeken</h1>
+    <p>{{ current_user.naam }}{% if current_user.klas %} ({{ current_user.klas }}){% endif %}</p>
+    {% for bericht in get_flashed_messages() %}<p><b>{{ bericht }}</b></p>{% endfor %}
+
+    <h2>Nu uitgeleend</h2>
+    {% if open_uitleningen %}
+        <table border="1" cellpadding="6">
+            <tr>
+                <th>Boek</th>
+                <th>Uitgeleend op</th>
+                <th>Terugbrengen voor</th>
+                <th>Status</th>
+                <th>Verlengen</th>
+            </tr>
+            {% for u in open_uitleningen %}
+            <tr>
+                <td><a href="{{ url_for('boek_detail', id=u.exemplaar.boek_id) }}">{{ u.exemplaar.boek.titel }}</a></td>
+                <td>{{ u.uitgeleend_op|datum }}</td>
+                <td>{{ u.uiterste_datum|datum }}</td>
+                <td>
+                    {% if u.te_laat_dagen %}<b>TE LAAT ({{ u.te_laat_dagen }} dagen)</b>{% else %}Op tijd{% endif %}
+                </td>
+                <td>
+                    {% if u.te_laat_dagen %}
+                        Niet meer mogelijk
+                    {% elif u.aantal_verlengingen >= max_verlengingen %}
+                        Maximum bereikt
+                    {% else %}
+                        <form method="post" action="{{ url_for('uitlening_verlengen', id=u.id) }}" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit">Verlengen</button>
+                        </form>
+                        (nog {{ max_verlengingen - u.aantal_verlengingen }}x)
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    {% else %}
+        <p>Je hebt geen boeken uitgeleend.</p>
+    {% endif %}
+
+    <h2>Te laat teruggebracht</h2>
+    <p>
+        Je was al <b>{{ aantal_te_laat }}</b> keer te laat.
+        {% for aantal, soort in drempels.items() %}Bij {{ aantal }} keer: {{ soort }}{% if not loop.last %}, {% else %}.{% endif %}{% endfor %}
+    </p>
+    {% if maatregelen %}
+        <table border="1" cellpadding="6">
+            <tr><th>Datum</th><th>Maatregel</th><th>Reden</th><th>Afgehandeld</th></tr>
+            {% for m in maatregelen %}
+            <tr>
+                <td>{{ m.datum|datum }}</td>
+                <td>{{ m.soort }}</td>
+                <td>{{ m.reden }}</td>
+                <td>{{ 'Ja' if m.afgehandeld else 'Nee' }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    {% endif %}
+
+    <h2>Mijn uitleengeschiedenis</h2>
+    {% if geschiedenis %}
+        <table border="1" cellpadding="6">
+            <tr><th>Boek</th><th>Uitgeleend op</th><th>Teruggebracht op</th></tr>
+            {% for u in geschiedenis %}
+            <tr>
+                <td><a href="{{ url_for('boek_detail', id=u.exemplaar.boek_id) }}">{{ u.exemplaar.boek.titel }}</a></td>
+                <td>{{ u.uitgeleend_op|datum }}</td>
+                <td>{{ u.teruggebracht_op|datum }}{% if u.te_laat_dagen %} ({{ u.te_laat_dagen }} dagen te laat){% endif %}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    {% else %}
+        <p>Je hebt nog geen boeken teruggebracht.</p>
+    {% endif %}
+    <br>
+    <a href="{{ url_for('boeken') }}">Terug naar boeken</a>
+</body>
+</html>
